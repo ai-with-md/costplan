@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "costplan"
+version = "0.1.0"
+description = "How much will my agent cost? Plan AI agent budgets, caps and spend from a handful of pilot runs"
+readme = "README.md"
+license = "MIT"
+authors = [{name = "Meenal Asesh"}]
+requires-python = ">=3.9"
+dependencies = []
+keywords = ["llm", "ai agents", "cost", "budget", "token cost", "llm cost", "cost per task", "statistics", "forecasting"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+costplan = "costplan.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/ai-with-md/costplan"
+Calculator = "https://ai-with-md.github.io/costplan/"
+Issues = "https://github.com/ai-with-md/costplan/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "src"]
+addopts = "--doctest-modules"
