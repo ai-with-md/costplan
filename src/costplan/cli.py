@@ -8,68 +8,37 @@ import sys
 from typing import List, Optional, Tuple
 
 from . import (
+    LoadedRuns,
     compare_cost_per_success,
+    load_runs,
     guaranteed_stop_rate,
     pilot_runs_for_average,
     project_spend,
     recommend_cap,
-    run_cost,
     runs_needed_for_cap,
     summarize,
 )
 
-_TRUE = {"1", "true", "t", "yes", "y", "pass", "passed", "success", "ok"}
-_FALSE = {"0", "false", "f", "no", "n", "fail", "failed", "failure", "error"}
-
-
 def read_runs(path: str, args: argparse.Namespace) -> Tuple[List[float], Optional[List[bool]]]:
-    """Read one row per run: a ``cost`` column, or token columns plus prices, and an optional ``success`` column."""
-    with open(path, newline="", encoding="utf-8-sig") as handle:
-        rows = list(csv.DictReader(handle))
-    if not rows:
-        raise ValueError(f"{path} has no runs")
-    columns = {c.strip().lower(): c for c in rows[0].keys() if c}
-    costs: List[float] = []
-    if args.cost_column.lower() in columns:
-        key = columns[args.cost_column.lower()]
-        for line, row in enumerate(rows, start=2):
-            try:
-                costs.append(float(row[key]))
-            except (TypeError, ValueError):
-                raise ValueError(f"{path}, line {line}: cannot read cost {row[key]!r}") from None
-    elif "input_tokens" in columns and "output_tokens" in columns:
-        if args.input_price is None or args.output_price is None:
-            raise ValueError(
-                f"{path} has token columns but no cost column: pass --input-price and --output-price "
-                "(dollars per million tokens)"
-            )
-        cached = columns.get("cached_tokens")
-        for row in rows:
-            costs.append(
-                run_cost(
-                    float(row[columns["input_tokens"]]),
-                    float(row[columns["output_tokens"]]),
-                    args.input_price,
-                    args.output_price,
-                    float(row[cached]) if cached and row[cached] else 0,
-                    args.cached_price,
-                )
-            )
-    else:
-        raise ValueError(f"{path} needs a '{args.cost_column}' column, or input_tokens and output_tokens columns")
-    flags = None
-    if args.success_column.lower() in columns:
-        key = columns[args.success_column.lower()]
-        flags = []
-        for line, row in enumerate(rows, start=2):
-            cell = (row[key] or "").strip().lower()
-            if cell in _TRUE:
-                flags.append(True)
-            elif cell in _FALSE:
-                flags.append(False)
-            else:
-                raise ValueError(f"{path}, line {line}: cannot read {row[key]!r} as success or failure")
-    return costs, flags
+    loaded = _load(path, args)
+    return loaded.costs, loaded.successes
+
+
+def _load(path: str, args: argparse.Namespace, group_by: Optional[str] = None) -> LoadedRuns:
+    loaded = load_runs(
+        path,
+        cost=args.cost_column,
+        input_tokens=args.input_column,
+        output_tokens=args.output_column,
+        success=args.success_column,
+        group_by=group_by if group_by is not None else args.group_by,
+        input_price=args.input_price,
+        output_price=args.output_price,
+        cached_price=args.cached_price,
+    )
+    if args.verbose:
+        print(loaded.report(), file=sys.stderr)
+    return loaded
 
 
 def _cmd_summary(args: argparse.Namespace) -> str:
@@ -88,12 +57,28 @@ def _cmd_project(args: argparse.Namespace) -> str:
 
 
 def _cmd_compare(args: argparse.Namespace) -> str:
-    a_costs, a_flags = read_runs(args.file_a, args)
-    b_costs, b_flags = read_runs(args.file_b, args)
-    if a_flags is None or b_flags is None:
-        raise ValueError(f"both files need a '{args.success_column}' column to compare cost per success")
+    key = args.task_column
+    if args.paired and key and not args.group_by:
+        # Group by the task column so the two files can be lined up task by task.
+        a, b = _load(args.file_a, args, key), _load(args.file_b, args, key)
+    else:
+        a, b = _load(args.file_a, args), _load(args.file_b, args)
+    if a.successes is None or b.successes is None:
+        raise ValueError("both files need a success, status or error column to compare cost per success")
+    a_costs, a_flags, b_costs, b_flags = a.costs, a.successes, b.costs, b.successes
+    if args.paired and a.run_ids is not None and b.run_ids is not None:
+        b_index = {run: i for i, run in enumerate(b.run_ids)}
+        shared = [i for i, run in enumerate(a.run_ids) if run in b_index]
+        if len(shared) < 2:
+            raise ValueError("the two files share fewer than two task ids")
+        a_costs = [a.costs[i] for i in shared]
+        a_flags = [a.successes[i] for i in shared]
+        b_costs = [b.costs[b_index[a.run_ids[i]]] for i in shared]
+        b_flags = [b.successes[b_index[a.run_ids[i]]] for i in shared]
     names = tuple(args.names) if args.names else (args.file_a, args.file_b)
-    return compare_cost_per_success(a_costs, a_flags, b_costs, b_flags, names, args.confidence).summary()
+    return compare_cost_per_success(
+        a_costs, a_flags, b_costs, b_flags, names, paired=args.paired, confidence=args.confidence
+    ).summary()
 
 
 def _cmd_pilot(args: argparse.Namespace) -> str:
@@ -120,8 +105,12 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     def file_options(p: argparse.ArgumentParser) -> None:
-        p.add_argument("--cost-column", default="cost", help="column with each run's dollar cost (default: cost)")
-        p.add_argument("--success-column", default="success", help="column with pass/fail (default: success)")
+        p.add_argument("--cost-column", help="column with each row's dollar cost (found automatically if left out)")
+        p.add_argument("--input-column", help="column with input tokens (found automatically if left out)")
+        p.add_argument("--output-column", help="column with output tokens (found automatically if left out)")
+        p.add_argument("--success-column", help="column with pass/fail (found automatically if left out)")
+        p.add_argument("--group-by", help="column naming the run each row belongs to, for exports with one row per model call")
+        p.add_argument("-v", "--verbose", action="store_true", help="say which columns were used")
         p.add_argument("--input-price", type=float, help="dollars per million input tokens, if the file has tokens not costs")
         p.add_argument("--output-price", type=float, help="dollars per million output tokens")
         p.add_argument("--cached-price", type=float, help="dollars per million cached input tokens")
@@ -148,6 +137,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("file_a")
     p.add_argument("file_b")
     p.add_argument("--names", nargs=2, metavar=("A", "B"))
+    p.add_argument("--paired", action="store_true", help="both files ran the same tasks; compare task by task")
+    p.add_argument("--task-column", help="column with a task id, to line up the two files when --paired")
     file_options(p)
     p.set_defaults(run=_cmd_compare)
 

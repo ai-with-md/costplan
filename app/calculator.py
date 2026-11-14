@@ -285,7 +285,7 @@ def _(cm_a_cost, cm_a_rate, cm_b_cost, cm_b_rate, mo):
 
                 A model with lower prices that fails more often, or loops more, can cost more per
                 task that actually gets done. Compare cost per success, not cost per call. With your
-                own pilot runs, `costplan compare a.csv b.csv` adds a confidence interval.
+                own pilot runs, `costplan compare a.csv b.csv` adds a confidence interval. Run both models on the same tasks and add `--paired` for a much tighter one.
                 """
             ),
             mo.hstack([cm_a_cost, cm_a_rate], wrap=True),

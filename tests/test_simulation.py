@@ -114,3 +114,41 @@ def test_cheaper_model_is_found_cheaper_per_success():
         result = cp.compare_cost_per_success(a, a_ok, b, b_ok, resamples=300)
         found += result.ratio_interval[1] < 1
     assert found >= 80
+
+
+# Paired comparison: both setups run the same tasks, and hard tasks cost more for both.
+
+
+def paired_pilot(rng, n, ratio=0.6, p_a=0.9, p_b=0.75, noise=0.25):
+    def wobble():
+        return rng.lognormvariate(-noise ** 2 / 2, noise)  # average 1
+
+    hardness = [rng.lognormvariate(-0.9 ** 2 / 2, 0.9) for _ in range(n)]
+    a = [0.10 * h * wobble() for h in hardness]
+    b = [0.10 * ratio * h * wobble() for h in hardness]
+    a_ok = [rng.random() < p_a for _ in range(n)]
+    b_ok = [rng.random() < p_b for _ in range(n)]
+    return a, a_ok, b, b_ok
+
+
+def test_paired_interval_covers_the_true_ratio():
+    rng = random.Random(10)
+    truth = 0.6 * 0.9 / 0.75
+    hits = 0
+    for _ in range(300):
+        a, a_ok, b, b_ok = paired_pilot(rng, 80)
+        lo, hi = cp.compare_cost_per_success(a, a_ok, b, b_ok, paired=True, resamples=400).ratio_interval
+        hits += lo <= truth <= hi
+    assert hits / 300 >= 0.90
+
+
+def test_pairing_gives_much_tighter_intervals():
+    rng = random.Random(11)
+    paired_width = separate_width = 0.0
+    for _ in range(60):
+        a, a_ok, b, b_ok = paired_pilot(rng, 60)
+        lo, hi = cp.compare_cost_per_success(a, a_ok, b, b_ok, paired=True, resamples=400).ratio_interval
+        paired_width += hi - lo
+        lo, hi = cp.compare_cost_per_success(a, a_ok, b, b_ok, paired=False, resamples=400).ratio_interval
+        separate_width += hi - lo
+    assert paired_width < 0.7 * separate_width

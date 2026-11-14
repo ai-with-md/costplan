@@ -346,6 +346,7 @@ class CostComparison:
     ratio: Optional[float]
     ratio_interval: Optional[Tuple[float, float]]
     confidence: float
+    paired: bool = False
 
     def summary(self) -> str:
         if self.ratio is None:
@@ -360,7 +361,8 @@ class CostComparison:
         return (
             f"Cost per successful task: {self.a} {_fmt(self.a_cost_per_success)}, {self.b} {_fmt(self.b_cost_per_success)}.\n"
             f"  {self.b} costs {self.ratio:.2f} times as much as {self.a} per success "
-            f"({self.confidence:.0%} interval {lo:.2f} to {hi:.2f}). {verdict}"
+            f"({self.confidence:.0%} interval {lo:.2f} to {hi:.2f}, "
+            f"{'same tasks, compared task by task' if self.paired else 'separate pilots'}). {verdict}"
         )
 
     def __str__(self) -> str:
@@ -373,29 +375,37 @@ def compare_cost_per_success(
     b_costs: Iterable[float],
     b_successes: Iterable,
     names: Tuple[str, str] = ("A", "B"),
+    paired: bool = False,
     confidence: float = 0.95,
     resamples: int = 2000,
     seed: int = 0,
 ) -> CostComparison:
-    """Which setup is cheaper per successful task? Runs of A and B are separate pilots.
+    """Which setup is cheaper per successful task?
 
     A cheaper model that fails more often can cost more per task that gets
-    done. The interval is a bootstrap of the ratio, resampling each pilot
-    separately.
+    done. The interval is a bootstrap of the ratio of costs per success.
+
+    Args:
+        paired: True when both setups ran the same tasks, in the same order.
+            Hard tasks are expensive for both, so comparing task by task
+            removes that variation and gives a much tighter interval from the
+            same number of runs. False when the two pilots ran different tasks.
     """
     import random
 
     check_level(confidence, "confidence")
     ac, af = _clean(a_costs, a_successes)
     bc, bf = _clean(b_costs, b_successes)
+    if paired and len(ac) != len(bc):
+        raise ValueError("a paired comparison needs the same tasks for both setups, so the same number of runs")
     a_cps, b_cps = _cost_per_success(ac, af), _cost_per_success(bc, bf)
     if a_cps is None or b_cps is None:
-        return CostComparison(names[0], names[1], a_cps, b_cps, None, None, confidence)
+        return CostComparison(names[0], names[1], a_cps, b_cps, None, None, confidence, paired)
     rng = random.Random(seed)
     ratios = []
     for _ in range(resamples):
         ia = [rng.randrange(len(ac)) for _ in ac]
-        ib = [rng.randrange(len(bc)) for _ in bc]
+        ib = ia if paired else [rng.randrange(len(bc)) for _ in bc]
         ra = _cost_per_success([ac[i] for i in ia], [af[i] for i in ia])
         rb = _cost_per_success([bc[i] for i in ib], [bf[i] for i in ib])
         if ra and rb is not None:
@@ -403,4 +413,4 @@ def compare_cost_per_success(
     ratios.sort()
     tail = (1 - confidence) / 2
     interval = (quantile(ratios, tail), quantile(ratios, 1 - tail))
-    return CostComparison(names[0], names[1], a_cps, b_cps, b_cps / a_cps, interval, confidence)
+    return CostComparison(names[0], names[1], a_cps, b_cps, b_cps / a_cps, interval, confidence, paired)

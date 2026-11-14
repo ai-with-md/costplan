@@ -48,13 +48,32 @@ No dependencies beyond the standard library. Python 3.9 or newer.
 
 ## Use
 
-Start from one row per pilot run: its dollar cost, and whether it succeeded. Most tracing tools and provider usage exports give you both. If you only have token counts, `run_cost` turns them into dollars with your provider's prices (costplan ships no price table, because prices change; a price list such as [tokencost](https://github.com/AgentOps-AI/tokencost) can help).
+### Reading your exports
+
+`load_runs` reads a CSV, JSON or JSON Lines export from your tracing tool or provider and finds the cost, token, success and run columns by their common names (`cost`, `total_cost`, `totalCost`, `calculatedTotalCost`, `prompt_tokens`, `input_tokens`, `usage.input`, `status`, `error`, `trace_id`, `traceId` and others).
 
 ```python
 import costplan as cp
 
+runs = cp.load_runs("calls_export.jsonl", group_by="trace_id")
+print(runs.report())
+# Read 318 rows into 40 runs (cost from 'cost', status from 'status', runs from 'trace_id').
+
+costs, successes = runs.costs, runs.successes
+```
+
+- **One row per model call?** Pass `group_by` with the column that names the run (a trace or session id). Calls are added up into runs, and a run counts as failed if any of its calls failed.
+- **One row per run, already totalled?** Load it as it is. Grouping it again would count costs twice.
+- **No cost column, or calls your tool could not price?** Pass `input_price` and `output_price` in dollars per million tokens and costplan prices them from the token columns. costplan ships no price table, because prices change; take them from your provider's pricing page or a list such as [tokencost](https://github.com/AgentOps-AI/tokencost).
+- **Names not found?** Pass them yourself: `cost="spend"`, `success="passed"`, and dotted names for nested JSON such as `"usage.prompt_tokens"`.
+
+The column guesses are tested on files shaped like LangSmith run exports and Langfuse observation exports, using the field names in their documentation. Check `runs.report()` the first time you load a new kind of file.
+
+`run_cost` does the same pricing for a single call:
+
+```python
 cp.run_cost(input_tokens=12_000, output_tokens=800, input_price=3.0, output_price=15.0)
-# 0.048  (prices in dollars per million tokens)
+# 0.048
 ```
 
 ### 1. What does a run cost?
@@ -108,10 +127,22 @@ At high volume the run to run variation averages out, and nearly all of the rang
 ```python
 print(cp.compare_cost_per_success(large_costs, large_ok, small_costs, small_ok, names=("large model", "small model")))
 # Cost per successful task: large model $0.1855, small model $0.2197.
-#   small model costs 1.18 times as much as large model per success (95% interval 0.71 to 2.02). The difference could be noise.
+#   small model costs 1.18 times as much as large model per success (95% interval 0.71 to 2.02, separate pilots). The difference could be noise.
 ```
 
 In this example the small model is about 30% cheaper per run, but it fails and loops more often, so it probably costs more per finished task. With 60 runs each, costplan correctly says the difference is not yet certain.
+
+**Run both models on the same tasks if you can.** Hard tasks are expensive for every model, so comparing task by task removes that variation. With `paired=True` the same 60 tasks give an answer that separate pilots cannot:
+
+```python
+cp.compare_cost_per_success(large_costs, large_ok, small_costs, small_ok, names=("large model", "small model"))
+#   small model costs 0.73 times as much as large model per success (95% interval 0.49 to 1.08, separate pilots). The difference could be noise.
+
+cp.compare_cost_per_success(large_costs, large_ok, small_costs, small_ok, names=("large model", "small model"), paired=True)
+#   small model costs 0.73 times as much as large model per success (95% interval 0.61 to 0.88, same tasks, compared task by task). small model is reliably cheaper per success.
+```
+
+In simulation, pairing gives intervals about half as wide from the same number of runs.
 
 ## Command line
 
@@ -120,10 +151,12 @@ costplan summary runs.csv
 costplan cap     runs.csv --stop-rate 0.02
 costplan project runs.csv --runs 300000
 costplan compare large.csv small.csv --names "large model" "small model"
+costplan compare large.csv small.csv --paired --task-column task_id
+costplan summary calls_export.jsonl --group-by trace_id -v
 costplan pilot   --stop-rate 0.02 --spread 1.0
 ```
 
-A CSV needs a `cost` column, or `input_tokens` and `output_tokens` columns plus `--input-price` and `--output-price`. An optional `success` column takes 1/0, true/false or pass/fail. Try it on the simulated pilots in [`examples/`](https://github.com/ai-with-md/costplan/tree/main/examples).
+Files can be CSV, JSON or JSON Lines, with the same automatic column finding as `load_runs`. Use `--cost-column`, `--success-column` and similar options when the guess is wrong, `--input-price` and `--output-price` for files with tokens but no costs, and `-v` to see which columns were used. Try it on the simulated files in [`examples/`](https://github.com/ai-with-md/costplan/tree/main/examples).
 
 ## How the numbers are checked
 
@@ -136,6 +169,8 @@ The test suite simulates thousands of pilots with lopsided costs where the truth
 | The interval for cost per successful task covers the truth | 93% |
 | The spend projection covers the real bill | 92% |
 | The interval for the average cost covers the truth | 92% |
+| The paired comparison interval covers the true ratio | 96% |
+| Paired vs separate pilots, same number of runs | interval about half as wide |
 
 The caps and quantiles make no assumption about the shape of costs and keep their promise. The intervals for averages run slightly short of 95% on lopsided costs, which is typical for the bootstrap; treat them as a little optimistic, especially below about 30 runs. See [`tests/test_simulation.py`](https://github.com/ai-with-md/costplan/blob/main/tests/test_simulation.py).
 

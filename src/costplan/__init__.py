@@ -1,5 +1,6 @@
 """How much will my agent cost? Plan agent budgets from a handful of pilot runs."""
 
+from .loading import LoadedRuns, load_runs
 from .planning import (
     CapAdvice,
     CostComparison,
@@ -16,6 +17,8 @@ from .planning import (
 )
 
 __all__ = [
+    "load_runs",
+    "LoadedRuns",
     "run_cost",
     "summarize",
     "recommend_cap",
