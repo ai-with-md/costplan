@@ -186,6 +186,13 @@ The caps and quantiles make no assumption about the shape of costs and keep thei
 - Caps and projections assume future runs behave like pilot runs. A new kind of request that triggers long loops will not show up in a pilot that never saw it.
 - The spend projection uses a normal approximation, which is a little narrow for very lopsided costs.
 
+## More tools
+
+Small, free tools for building and checking AI systems:
+
+- **[sturdytools](https://github.com/ai-with-md/sturdytools)**: retries, timeouts, rate limits and circuit breakers for the tools an AI agent calls.
+- **[evalsize](https://github.com/ai-with-md/evalsize)**: how many eval examples you need before a difference between prompts or models means anything.
+
 ## Development
 
 ```bash
